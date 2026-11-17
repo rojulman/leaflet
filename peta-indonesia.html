@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Peta Indonesia</title>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+          integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="">
+    <style>
+        body { margin: 0; font-family: system-ui, sans-serif; }
+        header { padding: 10px 16px; background: #1f4e79; color: #fff; }
+        header h1 { margin: 0; font-size: 20px; }
+        #map { height: calc(100vh - 44px); width: 100%; }
+    </style>
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+            integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+</head>
+<body>
+    <header><h1>Peta Indonesia</h1></header>
+    <div id="map"></div>
+
+    <script>
+        // Batas wilayah Indonesia: [selatan-barat], [utara-timur] dalam [lat, lon]
+        const batasIndonesia = [[-11.5, 94.5], [6.5, 141.5]];
+
+        // 1. Peta langsung menyesuaikan diri agar seluruh Indonesia terlihat
+        const map = L.map("map", {
+            minZoom: 4,                 // tidak bisa zoom out terlalu jauh
+            maxBounds: [[-15, 88], [10, 148]],  // tidak bisa digeser jauh dari Indonesia
+            maxBoundsViscosity: 0.8
+        }).fitBounds(batasIndonesia);
+
+        // 2. Basemap OpenStreetMap
+        const osm = L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
+            maxZoom: 19,
+            attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+        }).addTo(map);
+
+        // 3. Basemap alternatif: citra satelit Esri
+        const satelit = L.tileLayer(
+            "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
+            { maxZoom: 19, attribution: "Tiles &copy; Esri" }
+        );
+
+        // 4. Contoh marker: ibu kota negara
+        const jakarta = L.marker([-6.2088, 106.8456])
+            .bindPopup("<b>DKI Jakarta</b><br>Ibu kota negara")
+            .addTo(map);
+
+        // 5. Kontrol pilihan basemap dan skala
+        L.control.layers(
+            { "OpenStreetMap": osm, "Citra Satelit": satelit },
+            { "Marker Jakarta": jakarta }
+        ).addTo(map);
+        L.control.scale({ imperial: false }).addTo(map);
+
+        // 6. Tampilkan koordinat saat peta diklik (membantu mencari titik)
+        map.on("click", (e) => {
+            L.popup()
+                .setLatLng(e.latlng)
+                .setContent(`Lat: ${e.latlng.lat.toFixed(4)}<br>Lon: ${e.latlng.lng.toFixed(4)}`)
+                .openOn(map);
+        });
+    </script>
+</body>
+</html>
