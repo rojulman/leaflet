@@ -1,0 +1,296 @@
+{% load static %}
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Peta Provinsi Indonesia</title>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+          integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="">
+    <style>
+        * { box-sizing: border-box; }
+        body { margin: 0; font-family: system-ui, sans-serif; }
+        header { height: 52px; padding: 8px 16px; background: #1f4e79; color: #fff;
+                 display: flex; align-items: center; }
+        header h1 { margin: 0; font-size: 18px; }
+        header small { display: block; font-size: 12px; opacity: .85; }
+
+        .wadah { display: flex; height: calc(100vh - 52px); }
+        #panel { width: 280px; display: flex; flex-direction: column;
+                 border-right: 1px solid #ddd; background: #fafafa; }
+        #cari { margin: 10px; padding: 6px 10px; border: 1px solid #ccc; border-radius: 4px; }
+        #daftar { flex: 1; overflow-y: auto; }
+        #map { flex: 1; }
+
+        .item { padding: 7px 12px; border-bottom: 1px solid #e5e5e5; cursor: pointer; font-size: 13px; }
+        .item:hover { background: #e3eef9; }
+        .item.aktif { background: #fbe3e6; border-left: 4px solid #d1495b; font-weight: 600; }
+        .item .kode { display: inline-block; min-width: 28px; margin-right: 6px; padding: 1px 4px;
+                      border-radius: 3px; background: #1f4e79; color: #fff; font-size: 11px; text-align: center; }
+        .pesan { padding: 12px; font-size: 13px; }
+        .pesan.error { color: #b00020; }
+
+        /* Arah mata angin */
+        .mata-angin { background: rgba(255,255,255,.9); border-radius: 4px; padding: 4px 6px;
+                      box-shadow: 0 1px 4px rgba(0,0,0,.3); line-height: 0; }
+
+        /* Label garis koordinat (tepi kiri dan atas peta) */
+        .label-koordinat { position: absolute; inset: 0; pointer-events: none; z-index: 650; }
+        .label-koordinat span { position: absolute; font-size: 11px; color: #1f2d3d; white-space: nowrap;
+                                background: rgba(255,255,255,.8); padding: 0 3px; border-radius: 2px; }
+        .label-koordinat .atas { top: 2px; transform: translateX(-50%); }
+        .label-koordinat .kiri { left: 2px; transform: translateY(-50%); }
+
+        @media (max-width: 700px) {
+            .wadah { flex-direction: column; }
+            #panel { width: 100%; height: 35%; border-right: 0; border-bottom: 1px solid #ddd; }
+        }
+    </style>
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+            integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+</head>
+<body>
+    <header>
+        <div>
+            <h1>Peta Provinsi Indonesia</h1>
+            <small id="status">Memuat data provinsi...</small>
+        </div>
+    </header>
+
+    <div class="wadah">
+        <div id="panel">
+            <input id="cari" type="search" placeholder="Cari provinsi...">
+            <div id="daftar"><div class="pesan">Memuat data...</div></div>
+        </div>
+        <div id="map"></div>
+    </div>
+
+    <script>
+        // Alamat file JSON dibuat oleh Django dari folder static
+        const URL_PROVINSI = "{% static 'json/provinces.json' %}";
+        // Folder GeoJSON batas provinsi: static/json/11.geojson, 12.geojson, dst.
+        const URL_FOLDER_JSON = "{% static 'json/' %}";
+
+        // 1. Peta dengan fokus wilayah Indonesia
+        // Tombol zoom dipindah ke kanan bawah agar tepi kiri dan atas bebas untuk label koordinat
+        const map = L.map("map", { minZoom: 4, zoomControl: false })
+                     .fitBounds([[-11.5, 94.5], [6.5, 141.5]]);
+        L.control.zoom({ position: "bottomright" }).addTo(map);
+
+        const osm = L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
+            maxZoom: 19,
+            attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
+        }).addTo(map);
+
+        const satelit = L.tileLayer(
+            "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
+            { maxZoom: 19, attribution: "Tiles &copy; Esri" }
+        );
+
+        const lapisanProvinsi = L.featureGroup().addTo(map);
+        const lapisanBatas = L.featureGroup().addTo(map);   // polygon provinsi yang dipilih
+        const lapisanGrid = L.layerGroup().addTo(map);      // garis lintang dan bujur
+
+        L.control.layers(
+            { "OpenStreetMap": osm, "Citra Satelit": satelit },
+            { "Provinsi": lapisanProvinsi, "Batas Provinsi": lapisanBatas, "Garis Koordinat": lapisanGrid }
+        ).addTo(map);
+
+        // Skala peta (metrik)
+        L.control.scale({ imperial: false, maxWidth: 150 }).addTo(map);
+
+        // Arah mata angin (utara)
+        const MataAngin = L.Control.extend({
+            options: { position: "topright" },
+            onAdd() {
+                const div = L.DomUtil.create("div", "mata-angin");
+                div.title = "Arah utara";
+                div.innerHTML = `
+                    <svg width="44" height="58" viewBox="0 0 44 58" aria-label="Arah utara">
+                        <text x="22" y="12" text-anchor="middle" font-size="13" font-weight="bold"
+                              font-family="system-ui, sans-serif" fill="#1f2d3d">U</text>
+                        <polygon points="22,16 31,50 22,43" fill="#1f2d3d"/>
+                        <polygon points="22,16 13,50 22,43" fill="#fff" stroke="#1f2d3d" stroke-width="1"/>
+                    </svg>`;
+                return div;
+            }
+        });
+        new MataAngin().addTo(map);
+
+        // Garis koordinat geografis + label di tepi kiri (lintang) dan atas (bujur)
+        const wadahLabel = L.DomUtil.create("div", "label-koordinat", map.getContainer());
+
+        function intervalGrid(zoom) {
+            if (zoom <= 4) return 10;
+            if (zoom === 5) return 5;
+            if (zoom === 6) return 2;
+            if (zoom === 7) return 1;
+            if (zoom === 8) return 0.5;
+            if (zoom === 9) return 0.25;
+            if (zoom === 10) return 0.1;
+            return 0.05;
+        }
+
+        // Format derajat-menit, contoh: 6°LS, 106°30'BT
+        function formatKoordinat(nilai, jenis) {
+            const mutlak = Math.abs(nilai);
+            let derajat = Math.floor(mutlak + 1e-9);
+            let menit = Math.round((mutlak - derajat) * 60);
+            if (menit === 60) { derajat += 1; menit = 0; }
+            const teks = menit ? `${derajat}°${menit}'` : `${derajat}°`;
+            if (nilai === 0) return "0°";
+            if (jenis === "lat") return teks + (nilai > 0 ? "LU" : "LS");
+            return teks + (nilai > 0 ? "BT" : "BB");
+        }
+
+        function gambarGrid() {
+            lapisanGrid.clearLayers();
+            wadahLabel.innerHTML = "";
+            if (!map.hasLayer(lapisanGrid)) return;
+
+            const b = map.getBounds();
+            const ukuran = map.getSize();
+            const step = intervalGrid(map.getZoom());
+            const gaya = { color: "#555", weight: 0.8, opacity: 0.6, dashArray: "4 4", interactive: false };
+            const bulat = (v) => Math.round(v * 1e6) / 1e6;
+
+            // Garis lintang + label kiri
+            for (let lat = Math.ceil(b.getSouth() / step) * step; lat <= b.getNorth(); lat += step) {
+                const v = bulat(lat);
+                L.polyline([[v, b.getWest() - 1], [v, b.getEast() + 1]], gaya).addTo(lapisanGrid);
+                const y = map.latLngToContainerPoint([v, b.getWest()]).y;
+                if (y > 22 && y < ukuran.y - 40) {
+                    const s = L.DomUtil.create("span", "kiri", wadahLabel);
+                    s.style.top = `${y}px`;
+                    s.textContent = formatKoordinat(v, "lat");
+                }
+            }
+
+            // Garis bujur + label atas
+            for (let lon = Math.ceil(b.getWest() / step) * step; lon <= b.getEast(); lon += step) {
+                const v = bulat(lon);
+                L.polyline([[b.getSouth() - 1, v], [b.getNorth() + 1, v]], gaya).addTo(lapisanGrid);
+                const x = map.latLngToContainerPoint([b.getNorth(), v]).x;
+                if (x > 50 && x < ukuran.x - 70) {
+                    const s = L.DomUtil.create("span", "atas", wadahLabel);
+                    s.style.left = `${x}px`;
+                    s.textContent = formatKoordinat(v, "lon");
+                }
+            }
+        }
+
+        map.on("move zoomend resize overlayadd overlayremove", gambarGrid);
+        gambarGrid();
+
+        // 2. Pengaman teks sebelum dimasukkan ke HTML
+        function aman(teks) {
+            const div = document.createElement("div");
+            div.textContent = teks ?? "";
+            return div.innerHTML;
+        }
+
+        // 3. Polygon batas provinsi (dimuat saat provinsi dipilih)
+        const cacheGeojson = {};      // { "11": data GeoJSON, ... } agar tidak fetch ulang
+        let itemAktif = null;
+
+        const gayaBatas = {
+            color: "#d1495b", weight: 2, opacity: 1,
+            fillColor: "#d1495b", fillOpacity: 0.15
+        };
+
+        async function tampilkanPolygon(p, marker, item) {
+            const status = document.getElementById("status");
+
+            // Tandai item yang dipilih di daftar
+            if (itemAktif) itemAktif.classList.remove("aktif");
+            item.classList.add("aktif");
+            itemAktif = item;
+
+            try {
+                if (!cacheGeojson[p.id]) {
+                    status.textContent = `Memuat batas wilayah ${p.name}...`;
+                    const respon = await fetch(`${URL_FOLDER_JSON}${p.id}.geojson`);
+                    if (!respon.ok) throw new Error(`HTTP ${respon.status}`);
+                    cacheGeojson[p.id] = await respon.json();
+                }
+
+                lapisanBatas.clearLayers();
+                const polygon = L.geoJSON(cacheGeojson[p.id], {
+                    style: gayaBatas,
+                    onEachFeature: (fitur, layer) => {
+                        layer.bindTooltip(p.name, { sticky: true });
+                        layer.on("mouseover", () => layer.setStyle({ fillOpacity: 0.3 }));
+                        layer.on("mouseout",  () => layer.setStyle({ fillOpacity: 0.15 }));
+                    }
+                }).addTo(lapisanBatas);
+
+                map.flyToBounds(polygon.getBounds(), { padding: [30, 30], duration: 0.8 });
+                marker.openPopup();
+                status.textContent = `Batas wilayah: ${p.name} (${p.id}.geojson)`;
+            } catch (err) {
+                console.error(err);
+                // Polygon gagal dimuat: tetap arahkan peta ke titik provinsi
+                lapisanBatas.clearLayers();
+                map.flyTo([Number(p.latitude), Number(p.longitude)], 7);
+                marker.openPopup();
+                status.textContent = `Batas wilayah ${p.name} tidak bisa dimuat (${p.id}.geojson: ${err.message})`;
+            }
+        }
+
+        // 4. Muat provinces.json lalu buat marker dan daftar
+        async function muatProvinsi() {
+            const status = document.getElementById("status");
+            const daftar = document.getElementById("daftar");
+
+            try {
+                const respon = await fetch(URL_PROVINSI);
+                if (!respon.ok) throw new Error(`HTTP ${respon.status}`);
+                const dataProvinsi = await respon.json();   // array of {id, name, latitude, longitude}
+
+                daftar.innerHTML = "";
+
+                dataProvinsi.forEach((p) => {
+                    const lat = Number(p.latitude);
+                    const lon = Number(p.longitude);
+
+                    const marker = L.marker([lat, lon], { title: p.name })
+                        .bindPopup(`<b>${aman(p.name)}</b><br>
+                                    Kode wilayah: ${aman(p.id)}<br>
+                                    <small>Lat ${lat}, Lon ${lon}</small>`)
+                        .bindTooltip(p.name);
+                    marker.addTo(lapisanProvinsi);
+
+                    // Item di daftar samping
+                    const item = document.createElement("div");
+                    item.className = "item";
+                    item.dataset.nama = p.name.toLowerCase();
+                    item.innerHTML = `<span class="kode">${aman(p.id)}</span>${aman(p.name)}`;
+                    item.onclick = () => tampilkanPolygon(p, marker, item);
+                    marker.on("click", () => tampilkanPolygon(p, marker, item));
+                    daftar.appendChild(item);
+                });
+
+                map.fitBounds(lapisanProvinsi.getBounds(), { padding: [30, 30] });
+                status.textContent = `${dataProvinsi.length} provinsi dimuat dari provinces.json`;
+            } catch (err) {
+                console.error(err);
+                status.textContent = "Gagal memuat data";
+                daftar.innerHTML = `<div class="pesan error">
+                    File provinces.json tidak bisa dimuat (${aman(err.message)}).<br><br>
+                    Cek alamat <code>${aman(URL_PROVINSI)}</code> di browser dan
+                    pengaturan STATICFILES_DIRS di settings.py.</div>`;
+            }
+        }
+
+        // 5. Pencarian provinsi di daftar
+        document.getElementById("cari").addEventListener("input", (e) => {
+            const kata = e.target.value.toLowerCase();
+            document.querySelectorAll("#daftar .item").forEach((item) => {
+                item.style.display = item.dataset.nama.includes(kata) ? "" : "none";
+            });
+        });
+
+        muatProvinsi();
+    </script>
+</body>
+</html>
