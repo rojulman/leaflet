@@ -1,0 +1,146 @@
+{% load static %}
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Peta Provinsi Indonesia</title>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+          integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="">
+    <style>
+        * { box-sizing: border-box; }
+        body { margin: 0; font-family: system-ui, sans-serif; }
+        header { height: 52px; padding: 8px 16px; background: #1f4e79; color: #fff;
+                 display: flex; align-items: center; }
+        header h1 { margin: 0; font-size: 18px; }
+        header small { display: block; font-size: 12px; opacity: .85; }
+
+        .wadah { display: flex; height: calc(100vh - 52px); }
+        #panel { width: 280px; display: flex; flex-direction: column;
+                 border-right: 1px solid #ddd; background: #fafafa; }
+        #cari { margin: 10px; padding: 6px 10px; border: 1px solid #ccc; border-radius: 4px; }
+        #daftar { flex: 1; overflow-y: auto; }
+        #map { flex: 1; }
+
+        .item { padding: 7px 12px; border-bottom: 1px solid #e5e5e5; cursor: pointer; font-size: 13px; }
+        .item:hover { background: #e3eef9; }
+        .item .kode { display: inline-block; min-width: 28px; margin-right: 6px; padding: 1px 4px;
+                      border-radius: 3px; background: #1f4e79; color: #fff; font-size: 11px; text-align: center; }
+        .pesan { padding: 12px; font-size: 13px; }
+        .pesan.error { color: #b00020; }
+
+        @media (max-width: 700px) {
+            .wadah { flex-direction: column; }
+            #panel { width: 100%; height: 35%; border-right: 0; border-bottom: 1px solid #ddd; }
+        }
+    </style>
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+            integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+</head>
+<body>
+    <header>
+        <div>
+            <h1>Peta Provinsi Indonesia</h1>
+            <small id="status">Memuat data provinsi...</small>
+        </div>
+    </header>
+
+    <div class="wadah">
+        <div id="panel">
+            <input id="cari" type="search" placeholder="Cari provinsi...">
+            <div id="daftar"><div class="pesan">Memuat data...</div></div>
+        </div>
+        <div id="map"></div>
+    </div>
+
+    <script>
+        // Alamat file JSON dibuat oleh Django dari folder static
+        const URL_PROVINSI = "{% static 'json/provinces.json' %}";
+
+        // 1. Peta dengan fokus wilayah Indonesia
+        const map = L.map("map", { minZoom: 4 }).fitBounds([[-11.5, 94.5], [6.5, 141.5]]);
+
+        const osm = L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
+            maxZoom: 19,
+            attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+        }).addTo(map);
+
+        const satelit = L.tileLayer(
+            "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
+            { maxZoom: 19, attribution: "Tiles &copy; Esri" }
+        );
+
+        const lapisanProvinsi = L.featureGroup().addTo(map);
+
+        L.control.layers(
+            { "OpenStreetMap": osm, "Citra Satelit": satelit },
+            { "Provinsi": lapisanProvinsi }
+        ).addTo(map);
+        L.control.scale({ imperial: false }).addTo(map);
+
+        // 2. Pengaman teks sebelum dimasukkan ke HTML
+        function aman(teks) {
+            const div = document.createElement("div");
+            div.textContent = teks ?? "";
+            return div.innerHTML;
+        }
+
+        // 3. Muat provinces.json lalu buat marker dan daftar
+        async function muatProvinsi() {
+            const status = document.getElementById("status");
+            const daftar = document.getElementById("daftar");
+
+            try {
+                const respon = await fetch(URL_PROVINSI);
+                if (!respon.ok) throw new Error(`HTTP ${respon.status}`);
+                const dataProvinsi = await respon.json();   // array of {id, name, latitude, longitude}
+
+                daftar.innerHTML = "";
+
+                dataProvinsi.forEach((p) => {
+                    const lat = Number(p.latitude);
+                    const lon = Number(p.longitude);
+
+                    const marker = L.marker([lat, lon], { title: p.name })
+                        .bindPopup(`<b>${aman(p.name)}</b><br>
+                                    Kode wilayah: ${aman(p.id)}<br>
+                                    <small>Lat ${lat}, Lon ${lon}</small>`)
+                        .bindTooltip(p.name);
+                    marker.addTo(lapisanProvinsi);
+
+                    // Item di daftar samping
+                    const item = document.createElement("div");
+                    item.className = "item";
+                    item.dataset.nama = p.name.toLowerCase();
+                    item.innerHTML = `<span class="kode">${aman(p.id)}</span>${aman(p.name)}`;
+                    item.onclick = () => {
+                        map.flyTo([lat, lon], 7);
+                        marker.openPopup();
+                    };
+                    daftar.appendChild(item);
+                });
+
+                map.fitBounds(lapisanProvinsi.getBounds(), { padding: [30, 30] });
+                status.textContent = `${dataProvinsi.length} provinsi dimuat dari provinces.json`;
+            } catch (err) {
+                console.error(err);
+                status.textContent = "Gagal memuat data";
+                daftar.innerHTML = `<div class="pesan error">
+                    File provinces.json tidak bisa dimuat (${aman(err.message)}).<br><br>
+                    Cek alamat <code>${aman(URL_PROVINSI)}</code> di browser dan
+                    pengaturan STATICFILES_DIRS di settings.py.</div>`;
+            }
+        }
+
+        // 4. Pencarian provinsi di daftar
+        document.getElementById("cari").addEventListener("input", (e) => {
+            const kata = e.target.value.toLowerCase();
+            document.querySelectorAll("#daftar .item").forEach((item) => {
+                item.style.display = item.dataset.nama.includes(kata) ? "" : "none";
+            });
+        });
+
+        muatProvinsi();
+    </script>
+</body>
+</html>
